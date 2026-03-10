@@ -3,8 +3,6 @@ __pycache__/
 *.pyo
 *.log
 .env
-bot_token.py
-config.py
 temp/
 *.jpg
 *.png
