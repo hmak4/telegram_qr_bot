@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.env
+bot_token.py
+config.py
+temp/
+*.jpg
+*.png
+*.pdf
+*.zip
