@@ -3,5 +3,3 @@ Pillow
 pdf2image
 qrcode[pil]
 pypdf
-python-barcode
-python-dotenv
