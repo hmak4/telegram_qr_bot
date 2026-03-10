@@ -2,6 +2,7 @@
 """
 টেলিগ্রাম বট: জেনারেটর (Generator)
 বৈশিষ্ট্য: QR জেনারেটর, ছবি<->PDF কনভার্সন, PDF মার্জ/স্প্লিট/পাসওয়ার্ড, গ্রুপ মেম্বারশিপ চেক
+এনভায়রনমেন্ট ভেরিয়েবল ব্যবহার করে টোকেন ও গ্রুপ আইডি নেওয়া হয়েছে।
 """
 
 import os
@@ -24,16 +25,31 @@ import qrcode
 from PIL import Image
 from pdf2image import convert_from_path
 from pypdf import PdfReader, PdfWriter
+from dotenv import load_dotenv
 
-# ================= কনফিগারেশন =================
-BOT_TOKEN = "8720821797:AAFQRaB6a7N06WgtCNxxtN0SPYc2_Ywx3yI"  # আপনার বট টোকেন
-GROUP_CHAT_ID = -4931220826  # ⚠️ এখানে আপনার গ্রুপের সঠিক চ্যাট আইডি বসান (নিচের নির্দেশনা দেখুন)
-GROUP_INVITE_LINK = "https://t.me/+hgds2QYqh9piNmM1"  # আপনার গ্রুপ লিংক
+# ================= এনভায়রনমেন্ট ভেরিয়েবল লোড =================
+load_dotenv()  # .env ফাইল থেকে ভেরিয়েবল লোড করে (লোকাল টেস্টিংয়ের জন্য)
 
-# কনভারসেশন স্টেট (ধাপ)
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID")
+GROUP_INVITE_LINK = os.environ.get("GROUP_INVITE_LINK", "https://t.me/+hgds2QYqh9piNmM1")  # ডিফল্ট দেওয়া
+
+# ভেরিয়েবল চেক করা
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN environment variable not set!")
+if not GROUP_CHAT_ID:
+    raise ValueError("❌ GROUP_CHAT_ID environment variable not set!")
+
+# GROUP_CHAT_ID কে integer-এ রূপান্তর (কারণ os.environ string দেয়)
+try:
+    GROUP_CHAT_ID = int(GROUP_CHAT_ID)
+except ValueError:
+    raise ValueError("❌ GROUP_CHAT_ID must be an integer!")
+
+# কনভারসেশন স্টেট
 QR_TEXT, IMAGES_TO_PDF, PDF_TO_IMAGES, PDF_MERGE, PDF_SPLIT, PDF_PROTECT = range(6)
 
-# ================= গ্রুপ মেম্বারশিপ চেক ফাংশন (ডিবাগ প্রিন্ট সহ) =================
+# ================= গ্রুপ মেম্বারশিপ চেক ফাংশন =================
 async def is_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     user_id = update.effective_user.id
     try:
@@ -51,9 +67,9 @@ async def is_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         print(f"❌ ERROR in is_member: {e}")
         await update.effective_message.reply_text(
             f"⚠️ গ্রুপ ভেরিফিকেশন ত্রুটি:\n\n{str(e)}\n\nসম্ভাব্য কারণ:\n"
-            "1. GROUP_CHAT_ID ভুল (সঠিক আইডি @getidsbot দিয়ে বের করুন)\n"
-            "2. বট গ্রুপের সদস্য নয় (গ্রুপে বটকে অ্যাড করুন)\n"
-            "3. বটকে গ্রুপ থেকে বের করে দেওয়া হয়েছে (পুনরায় অ্যাড করুন)"
+            "1. GROUP_CHAT_ID ভুল\n"
+            "2. বট গ্রুপের সদস্য নয়\n"
+            "3. বটকে গ্রুপ থেকে বের করে দেওয়া হয়েছে"
         )
         return False
 
@@ -73,7 +89,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# ================= কলব্যাক হ্যান্ডলার (মেনু) =================
+# ================= কলব্যাক হ্যান্ডলার =================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -502,7 +518,6 @@ def main():
         fallbacks=[],
     )
 
-    # হ্যান্ডলার যোগ
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler_qr)
     app.add_handler(conv_handler_img2pdf)
@@ -513,7 +528,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler, pattern="^(pdf|back_to_main)$"))
     app.add_handler(MessageHandler(filters.ALL, fallback))
 
-    print("বট চালু হয়েছে...")
+    print("✅ বট চালু হয়েছে...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
