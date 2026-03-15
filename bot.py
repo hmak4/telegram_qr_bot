@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-টেলিগ্রাম বট: জেনারেটর (Generator) – সম্পূর্ণ ভাষা-সচেতন
-Poppler PATH সহ - সব প্ল্যাটফর্মের জন্য উপযোগী
+টেলিগ্রাম বট: জেনারেটর (Generator) – সম্পূর্ণ কার্যকরী সংস্করণ
+সব ফিচার সহ: QR, PDF→ছবি, ছবি→PDF, মার্জ, স্প্লিট, পাসওয়ার্ড
 """
 
 import os
@@ -9,6 +9,7 @@ import tempfile
 import zipfile
 import subprocess
 from io import BytesIO
+import traceback
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -23,34 +24,32 @@ from telegram.ext import (
 
 import qrcode
 from PIL import Image
-from pdf2image import convert_from_path, pdfinfo_from_path
+from pdf2image import convert_from_path
 from pypdf import PdfReader, PdfWriter
 
 # ================= কনফিগারেশন =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")  # আপনার বট টোকেন দিন
 
+# কনভারসেশন স্টেট
+QR_TEXT, IMAGES_TO_PDF, PDF_TO_IMAGES, PDF_MERGE, PDF_SPLIT, PDF_PROTECT = range(6)
+
 # ================= Poppler PATH ডিটেকশন =================
 def get_poppler_path():
-    """
-    সিস্টেম অনুযায়ী Poppler-এর PATH ডিটেক্ট করে
-    """
-    # সম্ভাব্য পাথগুলো চেক করা
+    """সিস্টেম অনুযায়ী Poppler-এর PATH ডিটেক্ট করে"""
     possible_paths = [
         '/usr/bin',                          # Linux (GitHub Actions, Ubuntu)
-        '/usr/local/bin',                    # macOS (Homebrew)
-        '/data/data/com.termux/files/usr/bin', # Termux (Android)
-        'C:\\poppler\\bin',                   # Windows (যদি ম্যানুয়ালি ইনস্টল করা হয়)
+        '/usr/local/bin',                    # macOS
+        '/data/data/com.termux/files/usr/bin', # Termux
+        'C:\\poppler\\bin',                   # Windows
         'C:\\Program Files\\poppler\\bin',    # Windows
     ]
     
-    # কোন পাথে pdftoppm আছে?
     for path in possible_paths:
         pdftoppm_path = os.path.join(path, 'pdftoppm')
         if os.path.exists(pdftoppm_path) or os.path.exists(pdftoppm_path + '.exe'):
             print(f"✅ Poppler found at: {path}")
             return path
     
-    # যা which কমান্ড দিয়ে খোঁজা
     try:
         result = subprocess.run(['which', 'pdftoppm'], capture_output=True, text=True)
         if result.returncode == 0:
@@ -60,7 +59,7 @@ def get_poppler_path():
     except:
         pass
     
-    print("⚠️ Poppler not found. Using default PATH.")
+    print("⚠️ Poppler not found. PDF→Image will not work.")
     return None
 
 POPPLER_PATH = get_poppler_path()
@@ -68,152 +67,100 @@ POPPLER_PATH = get_poppler_path()
 # ================= ভাষা সংক্রান্ত ডাটা =================
 LANGUAGES = {
     'bn': {
-        # Main menu
         'welcome': "🤖 *জেনারেটর বট*\n\nনিচের অপশন থেকে বেছে নিন:",
         'qr_btn': "🔳 QR কোড",
         'pdf_btn': "📄 PDF",
         'lang_btn': "🌐 ভাষা",
         'settings_btn': "⚙️ সেটিংস",
         'back_btn': "🔙 মেনুতে ফিরুন",
-        
-        # Language menu
-        'select_lang': "ভাষা নির্বাচন করুন:",
-        'bengali': "বাংলা",
-        'english': "ইংরেজি",
-        
-        # QR
         'qr_prompt': "আপনার টেক্সট বা লিংক পাঠান:",
         'qr_success': "✅ আপনার QR কোড প্রস্তুত!",
         'qr_error': "QR তৈরি করতে সমস্যা: {error}",
         'no_text': "❌ কোনো টেক্সট পাওয়া যায়নি।",
-        
-        # PDF menu
         'pdf_menu': "📄 PDF অপশন:",
         'img2pdf_btn': "🖼️ ছবি → PDF",
         'pdf2img_btn': "📑 PDF → ছবি",
         'merge_btn': "🔗 PDF মার্জ",
         'split_btn': "✂️ PDF স্প্লিট",
         'protect_btn': "🔐 PDF পাসওয়ার্ড",
-        
-        # Image to PDF
         'img2pdf_prompt': "ছবি পাঠান। শেষে /done লিখুন।",
         'img_added': "ছবি যোগ হয়েছে (মোট {count}টি)।",
         'img_none': "কোনো ছবি নেই।",
         'pdf_created': "✅ PDF তৈরি!",
         'pdf_error': "PDF ত্রুটি: {error}",
-        
-        # PDF to Image
         'pdf2img_prompt': "PDF ফাইল পাঠান:",
         'pdf_invalid': "PDF ফাইল পাঠান।",
-        'pdf2img_processing': "⏳ PDF প্রক্রিয়াকরণ হচ্ছে (মোট {pages} পৃষ্ঠা)...",
+        'pdf2img_processing': "⏳ PDF প্রক্রিয়াকরণ হচ্ছে...",
         'pdf2img_success': "✅ ছবি তৈরি!",
         'pdf2img_error': "PDF ত্রুটি: {error}",
-        
-        # Merge
         'merge_prompt': "PDF পাঠান। শেষে /done লিখুন।",
         'merge_added': "PDF যোগ হয়েছে (মোট {count}টি)।",
         'merge_need_more': "কমপক্ষে ২টি PDF দরকার।",
         'merge_success': "✅ মার্জ সম্পন্ন!",
         'merge_error': "মার্জ ত্রুটি: {error}",
-        
-        # Split
         'split_prompt': "PDF পাঠান:",
         'split_page_prompt': "পৃষ্ঠা নম্বর দিন (যেমন: 1-3,5):",
         'split_invalid': "বৈধ পৃষ্ঠা নেই।",
         'split_success': "✅ স্প্লিট সম্পন্ন!",
         'split_error': "স্প্লিট ত্রুটি: {error}",
-        
-        # Password
         'protect_prompt': "PDF পাঠান:",
         'protect_pass_prompt': "পাসওয়ার্ড দিন:",
         'protect_empty': "পাসওয়ার্ড খালি হবে না।",
         'protect_success': "✅ পাসওয়ার্ড সুরক্ষিত!",
         'protect_error': "পাসওয়ার্ড ত্রুটি: {error}",
-        
-        # Settings
-        'about': "জেনারেটর বট v2.0\nQR ও PDF টুলস",
-        
-        # Diagnose
+        'about': "জেনারেটর বট v3.0\nQR ও PDF টুলস",
         'diagnose_title': "🔍 ডায়াগনস্টিক রিপোর্ট",
         'poppler_status': "Poppler অবস্থান: {path}",
-        'poppler_not_found': "Poppler পাওয়া যায়নি। PDF→ছবি কাজ করবে না।",
-        
-        # Misc
+        'poppler_not_found': "Poppler পাওয়া যায়নি",
         'cancel': "বাতিল",
         'unknown': "বুঝতে পারিনি। /start দিন।"
     },
     'en': {
-        # Main menu
         'welcome': "🤖 *Generator Bot*\n\nChoose an option:",
         'qr_btn': "🔳 QR Code",
         'pdf_btn': "📄 PDF",
         'lang_btn': "🌐 Language",
         'settings_btn': "⚙️ Settings",
         'back_btn': "🔙 Back to Menu",
-        
-        # Language menu
-        'select_lang': "Select Language:",
-        'bengali': "Bengali",
-        'english': "English",
-        
-        # QR
         'qr_prompt': "Send text or link:",
         'qr_success': "✅ QR Code ready!",
         'qr_error': "QR error: {error}",
         'no_text': "❌ No text received.",
-        
-        # PDF menu
         'pdf_menu': "📄 PDF Options:",
         'img2pdf_btn': "🖼️ Image → PDF",
         'pdf2img_btn': "📑 PDF → Image",
         'merge_btn': "🔗 Merge PDF",
         'split_btn': "✂️ Split PDF",
         'protect_btn': "🔐 Password PDF",
-        
-        # Image to PDF
         'img2pdf_prompt': "Send images. Type /done when finished.",
         'img_added': "Image added (total {count}).",
         'img_none': "No images.",
         'pdf_created': "✅ PDF created!",
         'pdf_error': "PDF error: {error}",
-        
-        # PDF to Image
         'pdf2img_prompt': "Send PDF file:",
         'pdf_invalid': "Send a PDF file.",
-        'pdf2img_processing': "⏳ Processing PDF ({pages} pages)...",
+        'pdf2img_processing': "⏳ Processing PDF...",
         'pdf2img_success': "✅ Images created!",
         'pdf2img_error': "PDF error: {error}",
-        
-        # Merge
         'merge_prompt': "Send PDFs. Type /done when finished.",
         'merge_added': "PDF added (total {count}).",
         'merge_need_more': "Need at least 2 PDFs.",
         'merge_success': "✅ Merge complete!",
         'merge_error': "Merge error: {error}",
-        
-        # Split
         'split_prompt': "Send PDF:",
         'split_page_prompt': "Enter page numbers (e.g., 1-3,5):",
         'split_invalid': "No valid pages.",
         'split_success': "✅ Split complete!",
         'split_error': "Split error: {error}",
-        
-        # Password
         'protect_prompt': "Send PDF:",
         'protect_pass_prompt': "Enter password:",
         'protect_empty': "Password cannot be empty.",
         'protect_success': "✅ Password protected!",
         'protect_error': "Password error: {error}",
-        
-        # Settings
-        'about': "Generator Bot v2.0\nQR & PDF Tools",
-        
-        # Diagnose
+        'about': "Generator Bot v3.0\nQR & PDF Tools",
         'diagnose_title': "🔍 Diagnostic Report",
         'poppler_status': "Poppler path: {path}",
-        'poppler_not_found': "Poppler not found. PDF→Image will not work.",
-        
-        # Misc
+        'poppler_not_found': "Poppler not found",
         'cancel': "Cancel",
         'unknown': "Not recognized. Use /start."
     }
@@ -221,7 +168,6 @@ LANGUAGES = {
 
 # ================= হেলপার ফাংশন =================
 def get_text(key, context, **kwargs):
-    """ভাষা অনুযায়ী টেক্সট রিটার্ন করে"""
     lang = context.user_data.get('language', 'bn')
     text = LANGUAGES[lang].get(key, key)
     if kwargs:
@@ -230,7 +176,6 @@ def get_text(key, context, **kwargs):
 
 # ================= স্টার্ট =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """মূল মেনু দেখায়"""
     keyboard = [
         [
             InlineKeyboardButton(get_text('qr_btn', context), callback_data="qr"),
@@ -249,31 +194,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# ================= ডায়াগনস্টিক কমান্ড =================
+# ================= ডায়াগনস্টিক =================
 async def diagnose(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """সিস্টেম ডায়াগনস্টিক রিপোর্ট দেখায়"""
-    import sys
-    
     msg = f"**{get_text('diagnose_title', context)}**\n\n"
     
-    # পাইথন ভার্সন
-    msg += f"🐍 Python: {sys.version}\n"
-    
-    # pdf2image ভার্সন
-    import pdf2image
-    msg += f"📦 pdf2image: {pdf2image.__version__}\n"
-    
-    # Poppler স্ট্যাটাস
     if POPPLER_PATH:
         msg += f"✅ {get_text('poppler_status', context, path=POPPLER_PATH)}\n"
-        
-        # pdftoppm ভার্সন
         try:
             result = subprocess.run([os.path.join(POPPLER_PATH, 'pdftoppm'), '-v'], 
                                    capture_output=True, text=True)
             msg += f"   pdftoppm: {result.stderr.strip()}\n"
         except:
-            pass
+            msg += "   ⚠️ Version check failed\n"
     else:
         msg += f"❌ {get_text('poppler_not_found', context)}\n"
     
@@ -306,7 +238,6 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "set_lang_en":
         context.user_data['language'] = 'en'
     
-    # নতুন ভাষায় মূল মেনু দেখাও
     keyboard = [
         [
             InlineKeyboardButton(get_text('qr_btn', context), callback_data="qr"),
@@ -395,7 +326,7 @@ async def pdf_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ================= ইমেজ টু পিডিএফ =================
-async def pdf_img2pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def img2pdf_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(get_text('img2pdf_prompt', context))
@@ -403,6 +334,7 @@ async def pdf_img2pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def images_to_pdf_collect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
+        await update.message.reply_text("ছবি পাঠান।")
         return IMAGES_TO_PDF
         
     photo = update.message.photo[-1]
@@ -431,7 +363,7 @@ async def images_to_pdf_done(update: Update, context: ContextTypes.DEFAULT_TYPE)
         images_pil = [Image.open(img).convert('RGB') for img in images]
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
             pdf_path = tmp_pdf.name
-        images_pil[0].save(pdf_path, save_all=True, append_images=images_pil[1:], quality=85)
+        images_pil[0].save(pdf_path, save_all=True, append_images=images_pil[1:])
         
         with open(pdf_path, "rb") as f:
             await update.message.reply_document(
@@ -454,18 +386,27 @@ async def images_to_pdf_done(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(get_text('welcome', context), reply_markup=reply_markup)
     return ConversationHandler.END
 
-# ================= PDF টু ইমেজ (Poppler PATH সহ) =================
-async def pdf_pdf2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= PDF টু ইমেজ (সম্পূর্ণ ঠিক করা) =================
+async def pdf2img_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(get_text('pdf2img_prompt', context))
     return PDF_TO_IMAGES
 
 async def pdf_to_images_handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.document or not update.message.document.file_name.lower().endswith('.pdf'):
+    # PDF ফাইল চেক
+    if not update.message.document:
         await update.message.reply_text(get_text('pdf_invalid', context))
         return PDF_TO_IMAGES
     
+    if not update.message.document.file_name.lower().endswith('.pdf'):
+        await update.message.reply_text(get_text('pdf_invalid', context))
+        return PDF_TO_IMAGES
+    
+    # প্রসেসিং মেসেজ
+    status_msg = await update.message.reply_text("⏳ PDF প্রক্রিয়াকরণ হচ্ছে...")
+    
+    # PDF ডাউনলোড
     doc = update.message.document
     file = await context.bot.get_file(doc.file_id)
     
@@ -474,27 +415,26 @@ async def pdf_to_images_handle(update: Update, context: ContextTypes.DEFAULT_TYP
         await file.download_to_drive(pdf_path)
     
     try:
-        # PDF থেকে পৃষ্ঠা সংখ্যা বের করুন (Poppler PATH সহ)
+        # Poppler PATH সহ কনভার্ট
         if POPPLER_PATH:
-            info = pdfinfo_from_path(pdf_path, poppler_path=POPPLER_PATH)
-            total_pages = info['pages']
-            await update.message.reply_text(
-                get_text('pdf2img_processing', context, pages=total_pages)
-            )
-            
-            # ইমেজ কনভার্ট করুন (Poppler PATH সহ)
             images = convert_from_path(pdf_path, dpi=150, poppler_path=POPPLER_PATH)
         else:
-            # Poppler না থাকলে try without path
-            info = pdfinfo_from_path(pdf_path)
-            total_pages = info['pages']
-            await update.message.reply_text(
-                get_text('pdf2img_processing', context, pages=total_pages)
-            )
-            images = convert_from_path(pdf_path, dpi=150)
+            # Poppler না থাকলে try
+            try:
+                images = convert_from_path(pdf_path, dpi=150)
+            except Exception as e:
+                await status_msg.edit_text(
+                    "❌ PDF কনভার্ট করতে সমস্যা। সিস্টেমে Poppler ইনস্টল নেই।\n"
+                    "GitHub Actions-এ 'sudo apt install poppler-utils' যোগ করুন।"
+                )
+                os.unlink(pdf_path)
+                return ConversationHandler.END
         
-        # একাধিক ছবি থাকলে ZIP করে পাঠান
+        # সফল হলে
+        await status_msg.edit_text(f"✅ {len(images)}টি ছবি তৈরি হচ্ছে...")
+        
         if len(images) > 1:
+            # ZIP তৈরি
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_zip:
                 zip_path = tmp_zip.name
             
@@ -512,11 +452,13 @@ async def pdf_to_images_handle(update: Update, context: ContextTypes.DEFAULT_TYP
                     caption=get_text('pdf2img_success', context)
                 )
             os.unlink(zip_path)
+            await status_msg.delete()
         else:
-            # একটি মাত্র ছবি থাকলে সরাসরি পাঠান
+            # একক ছবি
             img_bytes = BytesIO()
             images[0].save(img_bytes, format='PNG')
             img_bytes.seek(0)
+            await status_msg.delete()
             await update.message.reply_photo(
                 photo=img_bytes,
                 caption=get_text('pdf2img_success', context)
@@ -525,20 +467,21 @@ async def pdf_to_images_handle(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         error_msg = str(e)
         if "poppler" in error_msg.lower():
-            error_msg += "\n\n💡 সমাধান: System-এ Poppler ইনস্টল করুন।"
-        await update.message.reply_text(get_text('pdf2img_error', context, error=error_msg))
-        import traceback
+            error_msg = "Poppler ইনস্টল নেই। GitHub Actions-এ 'sudo apt install poppler-utils' যোগ করুন।"
+        await status_msg.edit_text(f"❌ ত্রুটি: {error_msg}")
         traceback.print_exc()
     finally:
-        os.unlink(pdf_path)
+        try: os.unlink(pdf_path)
+        except: pass
     
+    # মেনুতে ফিরুন
     keyboard = [[InlineKeyboardButton(get_text('back_btn', context), callback_data="back_to_main")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(get_text('welcome', context), reply_markup=reply_markup)
     return ConversationHandler.END
 
 # ================= PDF মার্জ =================
-async def pdf_merge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def merge_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(get_text('merge_prompt', context))
@@ -549,9 +492,7 @@ async def merge_pdf_collect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(get_text('pdf_invalid', context))
         return PDF_MERGE
     
-    doc = update.message.document
-    file = await context.bot.get_file(doc.file_id)
-    
+    file = await context.bot.get_file(update.message.document.file_id)
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         await file.download_to_drive(tmp.name)
         if 'pdfs' not in context.user_data:
@@ -586,7 +527,6 @@ async def merge_pdf_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=get_text('merge_success', context)
             )
         os.unlink(output)
-        
     except Exception as e:
         await update.message.reply_text(get_text('merge_error', context, error=str(e)))
     finally:
@@ -601,7 +541,7 @@ async def merge_pdf_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ================= PDF স্প্লিট =================
-async def pdf_split(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def split_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(get_text('split_prompt', context))
@@ -612,9 +552,7 @@ async def split_pdf_get_file(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(get_text('pdf_invalid', context))
         return PDF_SPLIT
     
-    doc = update.message.document
-    file = await context.bot.get_file(doc.file_id)
-    
+    file = await context.bot.get_file(update.message.document.file_id)
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         pdf_path = tmp.name
         await file.download_to_drive(pdf_path)
@@ -666,7 +604,6 @@ async def split_pdf_get_pages(update: Update, context: ContextTypes.DEFAULT_TYPE
                 caption=get_text('split_success', context)
             )
         os.unlink(output)
-        
     except Exception as e:
         await update.message.reply_text(get_text('split_error', context, error=str(e)))
     finally:
@@ -678,8 +615,8 @@ async def split_pdf_get_pages(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(get_text('welcome', context), reply_markup=reply_markup)
     return ConversationHandler.END
 
-# ================= PDF পাসওয়ার্ড =================
-async def pdf_protect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= PDF পাসওয়ার্ড =================
+async def protect_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(get_text('protect_prompt', context))
@@ -690,9 +627,7 @@ async def protect_pdf_get_file(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(get_text('pdf_invalid', context))
         return PDF_PROTECT
     
-    doc = update.message.document
-    file = await context.bot.get_file(doc.file_id)
-    
+    file = await context.bot.get_file(update.message.document.file_id)
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         pdf_path = tmp.name
         await file.download_to_drive(pdf_path)
@@ -731,7 +666,6 @@ async def protect_pdf_set_password(update: Update, context: ContextTypes.DEFAULT
                 caption=get_text('protect_success', context)
             )
         os.unlink(output)
-        
     except Exception as e:
         await update.message.reply_text(get_text('protect_error', context, error=str(e)))
     finally:
@@ -789,15 +723,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "back_to_main":
         return await back_to_main(update, context)
     elif query.data == "img2pdf":
-        return await pdf_img2pdf(update, context)
+        return await img2pdf_menu(update, context)
     elif query.data == "pdf2img":
-        return await pdf_pdf2img(update, context)
+        return await pdf2img_menu(update, context)
     elif query.data == "merge_pdf":
-        return await pdf_merge(update, context)
+        return await merge_menu(update, context)
     elif query.data == "split_pdf":
-        return await pdf_split(update, context)
+        return await split_menu(update, context)
     elif query.data == "protect_pdf":
-        return await pdf_protect(update, context)
+        return await protect_menu(update, context)
     
     return ConversationHandler.END
 
@@ -810,13 +744,13 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
     # Conversation Handlers
-    conv_handler_qr = ConversationHandler(
+    conv_qr = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler, pattern="^qr$")],
         states={QR_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, qr_receive_text)]},
         fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
     )
     
-    conv_handler_img2pdf = ConversationHandler(
+    conv_img2pdf = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler, pattern="^img2pdf$")],
         states={
             IMAGES_TO_PDF: [
@@ -827,43 +761,43 @@ def main():
         fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
     )
     
-    conv_handler_pdf2img = ConversationHandler(
+    conv_pdf2img = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler, pattern="^pdf2img$")],
         states={
             PDF_TO_IMAGES: [
-                MessageHandler(filters.Document.PDF, pdf_to_images_handle),
+                MessageHandler(filters.Document.ALL, pdf_to_images_handle),
             ]
         },
         fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
     )
     
-    conv_handler_merge = ConversationHandler(
+    conv_merge = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler, pattern="^merge_pdf$")],
         states={
             PDF_MERGE: [
-                MessageHandler(filters.Document.PDF, merge_pdf_collect),
+                MessageHandler(filters.Document.ALL, merge_pdf_collect),
                 CommandHandler("done", merge_pdf_done),
             ]
         },
         fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
     )
     
-    conv_handler_split = ConversationHandler(
+    conv_split = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler, pattern="^split_pdf$")],
         states={
             PDF_SPLIT: [
-                MessageHandler(filters.Document.PDF, split_pdf_get_file),
+                MessageHandler(filters.Document.ALL, split_pdf_get_file),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, split_pdf_get_pages),
             ]
         },
         fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
     )
     
-    conv_handler_protect = ConversationHandler(
+    conv_protect = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler, pattern="^protect_pdf$")],
         states={
             PDF_PROTECT: [
-                MessageHandler(filters.Document.PDF, protect_pdf_get_file),
+                MessageHandler(filters.Document.ALL, protect_pdf_get_file),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, protect_pdf_set_password),
             ]
         },
@@ -872,19 +806,17 @@ def main():
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("diagnose", diagnose))
-    app.add_handler(conv_handler_qr)
-    app.add_handler(conv_handler_img2pdf)
-    app.add_handler(conv_handler_pdf2img)
-    app.add_handler(conv_handler_merge)
-    app.add_handler(conv_handler_split)
-    app.add_handler(conv_handler_protect)
+    app.add_handler(conv_qr)
+    app.add_handler(conv_img2pdf)
+    app.add_handler(conv_pdf2img)
+    app.add_handler(conv_merge)
+    app.add_handler(conv_split)
+    app.add_handler(conv_protect)
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, fallback))
     
-    print(f"✅ Bot started with Poppler path: {POPPLER_PATH}")
+    print(f"✅ Bot started with Poppler: {POPPLER_PATH}")
     app.run_polling()
 
 if __name__ == "__main__":
-    # কনভারসেশন স্টেট (গ্লোবাল ভেরিয়েবল)
-    QR_TEXT, IMAGES_TO_PDF, PDF_TO_IMAGES, PDF_MERGE, PDF_SPLIT, PDF_PROTECT = range(6)
     main()
