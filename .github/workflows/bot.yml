@@ -5,7 +5,7 @@ on:
     branches: [ main ]
   workflow_dispatch:
   schedule:
-    - cron: '0 */5 * * *'  # optional: প্রতি ৫ ঘন্টা পর রান করবে
+    - cron: '0 */5 * * *'  # প্রতি ৫ ঘন্টা পর (ঐচ্ছিক)
 
 jobs:
   run-bot:
@@ -21,13 +21,13 @@ jobs:
         with:
           python-version: "3.10"
 
-      # ⭐ গুরুত্বপূর্ণ: Poppler-utils ইনস্টল করার স্টেপ
+      # ⭐⭐⭐ গুরুত্বপূর্ণ অংশ: Poppler ইনস্টল করা ⭐⭐⭐
       - name: Install Poppler (for PDF to Image conversion)
         run: |
           sudo apt update
           sudo apt install -y poppler-utils
-          # Verify installation
-          pdftoppm -v
+          echo "✅ Poppler installed successfully!"
+          pdftoppm -v  # ভার্সন দেখাবে, কাজ হয়েছে কিনা নিশ্চিত হবে
 
       - name: Install Python dependencies
         run: |
@@ -37,4 +37,5 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
+          echo "Starting bot at $(date)"
           python bot.py
