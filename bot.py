@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 টেলিগ্রাম বট: জেনারেটর (Generator) – সম্পূর্ণ কার্যকরী সংস্করণ
-সব ফিচার সহ: QR, PDF→ছবি, ছবি→PDF, মার্জ, স্প্লিট, পাসওয়ার্ড
+PDF→ছবি সরাসরি convert_from_path ব্যবহার করে (pdfinfo ছাড়া)
 """
 
 import os
@@ -386,7 +386,7 @@ async def images_to_pdf_done(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(get_text('welcome', context), reply_markup=reply_markup)
     return ConversationHandler.END
 
-# ================= PDF টু ইমেজ (সম্পূর্ণ ঠিক করা) =================
+# ================= PDF টু ইমেজ (সম্পূর্ণ ঠিক করা - pdfinfo বাদ) =================
 async def pdf2img_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -415,20 +415,33 @@ async def pdf_to_images_handle(update: Update, context: ContextTypes.DEFAULT_TYP
         await file.download_to_drive(pdf_path)
     
     try:
-        # Poppler PATH সহ কনভার্ট
+        # সরাসরি convert_from_path ব্যবহার করুন (pdfinfo ছাড়া)
+        images = None
+        
         if POPPLER_PATH:
+            # Poppler PATH থাকলে ব্যবহার করুন
             images = convert_from_path(pdf_path, dpi=150, poppler_path=POPPLER_PATH)
         else:
-            # Poppler না থাকলে try
+            # Poppler PATH না থাকলে try without path
             try:
                 images = convert_from_path(pdf_path, dpi=150)
             except Exception as e:
-                await status_msg.edit_text(
-                    "❌ PDF কনভার্ট করতে সমস্যা। সিস্টেমে Poppler ইনস্টল নেই।\n"
-                    "GitHub Actions-এ 'sudo apt install poppler-utils' যোগ করুন।"
-                )
+                # যদি Poppler না থাকার কারণে ব্যর্থ হয়
+                if "poppler" in str(e).lower() or "pdftoppm" in str(e).lower():
+                    await status_msg.edit_text(
+                        "❌ PDF কনভার্ট করতে সমস্যা। সিস্টেমে Poppler ইনস্টল নেই।\n\n"
+                        "Termux-এ: `pkg install poppler`\n"
+                        "GitHub Actions-এ: `sudo apt install poppler-utils`"
+                    )
+                else:
+                    await status_msg.edit_text(f"❌ ত্রুটি: {str(e)}")
                 os.unlink(pdf_path)
                 return ConversationHandler.END
+        
+        if not images or len(images) == 0:
+            await status_msg.edit_text("❌ PDF থেকে কোনো ছবি তৈরি করা যায়নি।")
+            os.unlink(pdf_path)
+            return ConversationHandler.END
         
         # সফল হলে
         await status_msg.edit_text(f"✅ {len(images)}টি ছবি তৈরি হচ্ছে...")
@@ -466,8 +479,8 @@ async def pdf_to_images_handle(update: Update, context: ContextTypes.DEFAULT_TYP
             
     except Exception as e:
         error_msg = str(e)
-        if "poppler" in error_msg.lower():
-            error_msg = "Poppler ইনস্টল নেই। GitHub Actions-এ 'sudo apt install poppler-utils' যোগ করুন।"
+        if "poppler" in error_msg.lower() or "pdftoppm" in error_msg.lower():
+            error_msg = "Poppler ইনস্টল নেই। Termux-এ: `pkg install poppler`\nGitHub Actions-এ: `sudo apt install poppler-utils`"
         await status_msg.edit_text(f"❌ ত্রুটি: {error_msg}")
         traceback.print_exc()
     finally:
