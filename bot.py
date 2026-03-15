@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 টেলিগ্রাম বট: জেনারেটর (Generator) – সম্পূর্ণ ভাষা-সচেতন
-সমস্ত PDF ফাংশন সহ - ঠিক করা ভার্সন
+Poppler PATH সহ - সব প্ল্যাটফর্মের জন্য উপযোগী
 """
 
 import os
 import tempfile
 import zipfile
+import subprocess
 from io import BytesIO
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -22,14 +23,47 @@ from telegram.ext import (
 
 import qrcode
 from PIL import Image
-from pdf2image import convert_from_path
+from pdf2image import convert_from_path, pdfinfo_from_path
 from pypdf import PdfReader, PdfWriter
 
 # ================= কনফিগারেশন =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")  # আপনার বট টোকেন দিন
 
-# কনভারসেশন স্টেট
-QR_TEXT, IMAGES_TO_PDF, PDF_TO_IMAGES, PDF_MERGE, PDF_SPLIT, PDF_PROTECT = range(6)
+# ================= Poppler PATH ডিটেকশন =================
+def get_poppler_path():
+    """
+    সিস্টেম অনুযায়ী Poppler-এর PATH ডিটেক্ট করে
+    """
+    # সম্ভাব্য পাথগুলো চেক করা
+    possible_paths = [
+        '/usr/bin',                          # Linux (GitHub Actions, Ubuntu)
+        '/usr/local/bin',                    # macOS (Homebrew)
+        '/data/data/com.termux/files/usr/bin', # Termux (Android)
+        'C:\\poppler\\bin',                   # Windows (যদি ম্যানুয়ালি ইনস্টল করা হয়)
+        'C:\\Program Files\\poppler\\bin',    # Windows
+    ]
+    
+    # কোন পাথে pdftoppm আছে?
+    for path in possible_paths:
+        pdftoppm_path = os.path.join(path, 'pdftoppm')
+        if os.path.exists(pdftoppm_path) or os.path.exists(pdftoppm_path + '.exe'):
+            print(f"✅ Poppler found at: {path}")
+            return path
+    
+    # যা which কমান্ড দিয়ে খোঁজা
+    try:
+        result = subprocess.run(['which', 'pdftoppm'], capture_output=True, text=True)
+        if result.returncode == 0:
+            path = os.path.dirname(result.stdout.strip())
+            print(f"✅ Poppler found via which: {path}")
+            return path
+    except:
+        pass
+    
+    print("⚠️ Poppler not found. Using default PATH.")
+    return None
+
+POPPLER_PATH = get_poppler_path()
 
 # ================= ভাষা সংক্রান্ত ডাটা =================
 LANGUAGES = {
@@ -71,6 +105,7 @@ LANGUAGES = {
         # PDF to Image
         'pdf2img_prompt': "PDF ফাইল পাঠান:",
         'pdf_invalid': "PDF ফাইল পাঠান।",
+        'pdf2img_processing': "⏳ PDF প্রক্রিয়াকরণ হচ্ছে (মোট {pages} পৃষ্ঠা)...",
         'pdf2img_success': "✅ ছবি তৈরি!",
         'pdf2img_error': "PDF ত্রুটি: {error}",
         
@@ -97,6 +132,11 @@ LANGUAGES = {
         
         # Settings
         'about': "জেনারেটর বট v2.0\nQR ও PDF টুলস",
+        
+        # Diagnose
+        'diagnose_title': "🔍 ডায়াগনস্টিক রিপোর্ট",
+        'poppler_status': "Poppler অবস্থান: {path}",
+        'poppler_not_found': "Poppler পাওয়া যায়নি। PDF→ছবি কাজ করবে না।",
         
         # Misc
         'cancel': "বাতিল",
@@ -140,6 +180,7 @@ LANGUAGES = {
         # PDF to Image
         'pdf2img_prompt': "Send PDF file:",
         'pdf_invalid': "Send a PDF file.",
+        'pdf2img_processing': "⏳ Processing PDF ({pages} pages)...",
         'pdf2img_success': "✅ Images created!",
         'pdf2img_error': "PDF error: {error}",
         
@@ -166,6 +207,11 @@ LANGUAGES = {
         
         # Settings
         'about': "Generator Bot v2.0\nQR & PDF Tools",
+        
+        # Diagnose
+        'diagnose_title': "🔍 Diagnostic Report",
+        'poppler_status': "Poppler path: {path}",
+        'poppler_not_found': "Poppler not found. PDF→Image will not work.",
         
         # Misc
         'cancel': "Cancel",
@@ -202,6 +248,36 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
+
+# ================= ডায়াগনস্টিক কমান্ড =================
+async def diagnose(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """সিস্টেম ডায়াগনস্টিক রিপোর্ট দেখায়"""
+    import sys
+    
+    msg = f"**{get_text('diagnose_title', context)}**\n\n"
+    
+    # পাইথন ভার্সন
+    msg += f"🐍 Python: {sys.version}\n"
+    
+    # pdf2image ভার্সন
+    import pdf2image
+    msg += f"📦 pdf2image: {pdf2image.__version__}\n"
+    
+    # Poppler স্ট্যাটাস
+    if POPPLER_PATH:
+        msg += f"✅ {get_text('poppler_status', context, path=POPPLER_PATH)}\n"
+        
+        # pdftoppm ভার্সন
+        try:
+            result = subprocess.run([os.path.join(POPPLER_PATH, 'pdftoppm'), '-v'], 
+                                   capture_output=True, text=True)
+            msg += f"   pdftoppm: {result.stderr.strip()}\n"
+        except:
+            pass
+    else:
+        msg += f"❌ {get_text('poppler_not_found', context)}\n"
+    
+    await update.message.reply_text(msg)
 
 # ================= ভাষা মেনু =================
 async def language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -256,6 +332,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         [InlineKeyboardButton("ℹ️ About", callback_data="about")],
+        [InlineKeyboardButton("🔍 Diagnose", callback_data="diagnose")],
         [InlineKeyboardButton(get_text('back_btn', context), callback_data="back_to_main")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -377,7 +454,7 @@ async def images_to_pdf_done(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(get_text('welcome', context), reply_markup=reply_markup)
     return ConversationHandler.END
 
-# ================= PDF টু ইমেজ =================
+# ================= PDF টু ইমেজ (Poppler PATH সহ) =================
 async def pdf_pdf2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -397,7 +474,24 @@ async def pdf_to_images_handle(update: Update, context: ContextTypes.DEFAULT_TYP
         await file.download_to_drive(pdf_path)
     
     try:
-        images = convert_from_path(pdf_path, dpi=150)
+        # PDF থেকে পৃষ্ঠা সংখ্যা বের করুন (Poppler PATH সহ)
+        if POPPLER_PATH:
+            info = pdfinfo_from_path(pdf_path, poppler_path=POPPLER_PATH)
+            total_pages = info['pages']
+            await update.message.reply_text(
+                get_text('pdf2img_processing', context, pages=total_pages)
+            )
+            
+            # ইমেজ কনভার্ট করুন (Poppler PATH সহ)
+            images = convert_from_path(pdf_path, dpi=150, poppler_path=POPPLER_PATH)
+        else:
+            # Poppler না থাকলে try without path
+            info = pdfinfo_from_path(pdf_path)
+            total_pages = info['pages']
+            await update.message.reply_text(
+                get_text('pdf2img_processing', context, pages=total_pages)
+            )
+            images = convert_from_path(pdf_path, dpi=150)
         
         # একাধিক ছবি থাকলে ZIP করে পাঠান
         if len(images) > 1:
@@ -429,7 +523,12 @@ async def pdf_to_images_handle(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             
     except Exception as e:
-        await update.message.reply_text(get_text('pdf2img_error', context, error=str(e)))
+        error_msg = str(e)
+        if "poppler" in error_msg.lower():
+            error_msg += "\n\n💡 সমাধান: System-এ Poppler ইনস্টল করুন।"
+        await update.message.reply_text(get_text('pdf2img_error', context, error=error_msg))
+        import traceback
+        traceback.print_exc()
     finally:
         os.unlink(pdf_path)
     
@@ -685,6 +784,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await settings_menu(update, context)
     elif query.data == "about":
         await query.edit_message_text(get_text('about', context))
+    elif query.data == "diagnose":
+        await diagnose(update, context)
     elif query.data == "back_to_main":
         return await back_to_main(update, context)
     elif query.data == "img2pdf":
@@ -770,6 +871,7 @@ def main():
     )
     
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("diagnose", diagnose))
     app.add_handler(conv_handler_qr)
     app.add_handler(conv_handler_img2pdf)
     app.add_handler(conv_handler_pdf2img)
@@ -779,8 +881,10 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, fallback))
     
-    print("✅ Bot started with all PDF functions")
+    print(f"✅ Bot started with Poppler path: {POPPLER_PATH}")
     app.run_polling()
 
 if __name__ == "__main__":
+    # কনভারসেশন স্টেট (গ্লোবাল ভেরিয়েবল)
+    QR_TEXT, IMAGES_TO_PDF, PDF_TO_IMAGES, PDF_MERGE, PDF_SPLIT, PDF_PROTECT = range(6)
     main()
