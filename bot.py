@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 টেলিগ্রাম বট: জেনারেটর (Generator) – সম্পূর্ণ ভাষা-সচেতন
+সমস্ত PDF ফাংশন সহ - ঠিক করা ভার্সন
 """
 
 import os
@@ -25,7 +26,7 @@ from pdf2image import convert_from_path
 from pypdf import PdfReader, PdfWriter
 
 # ================= কনফিগারেশন =================
-BOT_TOKEN = os.environ.get("BOT_TOKEN") # ⚠️ আপনার বট টোকেন দিন
+BOT_TOKEN = os.environ.get("BOT_TOKEN")  # আপনার বট টোকেন দিন
 
 # কনভারসেশন স্টেট
 QR_TEXT, IMAGES_TO_PDF, PDF_TO_IMAGES, PDF_MERGE, PDF_SPLIT, PDF_PROTECT = range(6)
@@ -316,9 +317,7 @@ async def pdf_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# ================= PDF অপশন হ্যান্ডলার =================
-# (সংক্ষেপে শুধু img2pdf দেখালাম, বাকিগুলো একই প্যাটার্ন)
-
+# ================= ইমেজ টু পিডিএফ =================
 async def pdf_img2pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -378,6 +377,273 @@ async def images_to_pdf_done(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(get_text('welcome', context), reply_markup=reply_markup)
     return ConversationHandler.END
 
+# ================= PDF টু ইমেজ =================
+async def pdf_pdf2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(get_text('pdf2img_prompt', context))
+    return PDF_TO_IMAGES
+
+async def pdf_to_images_handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.document or not update.message.document.file_name.lower().endswith('.pdf'):
+        await update.message.reply_text(get_text('pdf_invalid', context))
+        return PDF_TO_IMAGES
+    
+    doc = update.message.document
+    file = await context.bot.get_file(doc.file_id)
+    
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+        pdf_path = tmp_pdf.name
+        await file.download_to_drive(pdf_path)
+    
+    try:
+        images = convert_from_path(pdf_path, dpi=150)
+        
+        # একাধিক ছবি থাকলে ZIP করে পাঠান
+        if len(images) > 1:
+            with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_zip:
+                zip_path = tmp_zip.name
+            
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                for i, img in enumerate(images):
+                    img_bytes = BytesIO()
+                    img.save(img_bytes, format='PNG')
+                    img_bytes.seek(0)
+                    zf.writestr(f"page_{i+1}.png", img_bytes.read())
+            
+            with open(zip_path, "rb") as f:
+                await update.message.reply_document(
+                    document=f,
+                    filename="images.zip",
+                    caption=get_text('pdf2img_success', context)
+                )
+            os.unlink(zip_path)
+        else:
+            # একটি মাত্র ছবি থাকলে সরাসরি পাঠান
+            img_bytes = BytesIO()
+            images[0].save(img_bytes, format='PNG')
+            img_bytes.seek(0)
+            await update.message.reply_photo(
+                photo=img_bytes,
+                caption=get_text('pdf2img_success', context)
+            )
+            
+    except Exception as e:
+        await update.message.reply_text(get_text('pdf2img_error', context, error=str(e)))
+    finally:
+        os.unlink(pdf_path)
+    
+    keyboard = [[InlineKeyboardButton(get_text('back_btn', context), callback_data="back_to_main")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(get_text('welcome', context), reply_markup=reply_markup)
+    return ConversationHandler.END
+
+# ================= PDF মার্জ =================
+async def pdf_merge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(get_text('merge_prompt', context))
+    return PDF_MERGE
+
+async def merge_pdf_collect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.document or not update.message.document.file_name.lower().endswith('.pdf'):
+        await update.message.reply_text(get_text('pdf_invalid', context))
+        return PDF_MERGE
+    
+    doc = update.message.document
+    file = await context.bot.get_file(doc.file_id)
+    
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        await file.download_to_drive(tmp.name)
+        if 'pdfs' not in context.user_data:
+            context.user_data['pdfs'] = []
+        context.user_data['pdfs'].append(tmp.name)
+    
+    await update.message.reply_text(
+        get_text('merge_added', context, count=len(context.user_data['pdfs']))
+    )
+    return PDF_MERGE
+
+async def merge_pdf_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    pdfs = context.user_data.get('pdfs', [])
+    if len(pdfs) < 2:
+        await update.message.reply_text(get_text('merge_need_more', context))
+        return ConversationHandler.END
+    
+    try:
+        merger = PdfWriter()
+        for pdf in pdfs:
+            merger.append(pdf)
+        
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            output = tmp.name
+            merger.write(output)
+            merger.close()
+        
+        with open(output, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename="merged.pdf",
+                caption=get_text('merge_success', context)
+            )
+        os.unlink(output)
+        
+    except Exception as e:
+        await update.message.reply_text(get_text('merge_error', context, error=str(e)))
+    finally:
+        for pdf in pdfs:
+            try: os.unlink(pdf)
+            except: pass
+        context.user_data['pdfs'] = []
+    
+    keyboard = [[InlineKeyboardButton(get_text('back_btn', context), callback_data="back_to_main")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(get_text('welcome', context), reply_markup=reply_markup)
+    return ConversationHandler.END
+
+# ================= PDF স্প্লিট =================
+async def pdf_split(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(get_text('split_prompt', context))
+    return PDF_SPLIT
+
+async def split_pdf_get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.document or not update.message.document.file_name.lower().endswith('.pdf'):
+        await update.message.reply_text(get_text('pdf_invalid', context))
+        return PDF_SPLIT
+    
+    doc = update.message.document
+    file = await context.bot.get_file(doc.file_id)
+    
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        pdf_path = tmp.name
+        await file.download_to_drive(pdf_path)
+        context.user_data['split_pdf'] = pdf_path
+    
+    await update.message.reply_text(get_text('split_page_prompt', context))
+    return PDF_SPLIT
+
+async def split_pdf_get_pages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    page_spec = update.message.text.strip()
+    pdf_path = context.user_data.get('split_pdf')
+    
+    if not pdf_path:
+        await update.message.reply_text("প্রথমে PDF দিন।")
+        return ConversationHandler.END
+    
+    try:
+        reader = PdfReader(pdf_path)
+        total = len(reader.pages)
+        
+        pages = set()
+        for part in page_spec.split(','):
+            part = part.strip()
+            if '-' in part:
+                start, end = map(int, part.split('-'))
+                pages.update(range(start, end+1))
+            else:
+                if part.isdigit():
+                    pages.add(int(part))
+        
+        valid_pages = [p-1 for p in pages if 1 <= p <= total]
+        
+        if not valid_pages:
+            await update.message.reply_text(get_text('split_invalid', context))
+            return PDF_SPLIT
+        
+        writer = PdfWriter()
+        for p in valid_pages:
+            writer.add_page(reader.pages[p])
+        
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            output = tmp.name
+            writer.write(output)
+        
+        with open(output, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename="split.pdf",
+                caption=get_text('split_success', context)
+            )
+        os.unlink(output)
+        
+    except Exception as e:
+        await update.message.reply_text(get_text('split_error', context, error=str(e)))
+    finally:
+        os.unlink(pdf_path)
+        context.user_data.pop('split_pdf', None)
+    
+    keyboard = [[InlineKeyboardButton(get_text('back_btn', context), callback_data="back_to_main")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(get_text('welcome', context), reply_markup=reply_markup)
+    return ConversationHandler.END
+
+# ================= PDF পাসওয়ার্ড =================
+async def pdf_protect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(get_text('protect_prompt', context))
+    return PDF_PROTECT
+
+async def protect_pdf_get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.document or not update.message.document.file_name.lower().endswith('.pdf'):
+        await update.message.reply_text(get_text('pdf_invalid', context))
+        return PDF_PROTECT
+    
+    doc = update.message.document
+    file = await context.bot.get_file(doc.file_id)
+    
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        pdf_path = tmp.name
+        await file.download_to_drive(pdf_path)
+        context.user_data['protect_pdf'] = pdf_path
+    
+    await update.message.reply_text(get_text('protect_pass_prompt', context))
+    return PDF_PROTECT
+
+async def protect_pdf_set_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    password = update.message.text.strip()
+    pdf_path = context.user_data.get('protect_pdf')
+    
+    if not pdf_path:
+        await update.message.reply_text("প্রথমে PDF দিন।")
+        return ConversationHandler.END
+    
+    if not password:
+        await update.message.reply_text(get_text('protect_empty', context))
+        return PDF_PROTECT
+    
+    try:
+        reader = PdfReader(pdf_path)
+        writer = PdfWriter()
+        for page in reader.pages:
+            writer.add_page(page)
+        writer.encrypt(password)
+        
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            output = tmp.name
+            writer.write(output)
+        
+        with open(output, "rb") as f:
+            await update.message.reply_document(
+                document=f,
+                filename="protected.pdf",
+                caption=get_text('protect_success', context)
+            )
+        os.unlink(output)
+        
+    except Exception as e:
+        await update.message.reply_text(get_text('protect_error', context, error=str(e)))
+    finally:
+        os.unlink(pdf_path)
+        context.user_data.pop('protect_pdf', None)
+    
+    keyboard = [[InlineKeyboardButton(get_text('back_btn', context), callback_data="back_to_main")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(get_text('welcome', context), reply_markup=reply_markup)
+    return ConversationHandler.END
+
 # ================= ব্যাক টু মেইন =================
 async def back_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -423,7 +689,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await back_to_main(update, context)
     elif query.data == "img2pdf":
         return await pdf_img2pdf(update, context)
-    # PDF এর অন্যান্য অপশন এখানে যোগ করবেন
+    elif query.data == "pdf2img":
+        return await pdf_pdf2img(update, context)
+    elif query.data == "merge_pdf":
+        return await pdf_merge(update, context)
+    elif query.data == "split_pdf":
+        return await pdf_split(update, context)
+    elif query.data == "protect_pdf":
+        return await pdf_protect(update, context)
     
     return ConversationHandler.END
 
@@ -439,7 +712,7 @@ def main():
     conv_handler_qr = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler, pattern="^qr$")],
         states={QR_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, qr_receive_text)]},
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
     )
     
     conv_handler_img2pdf = ConversationHandler(
@@ -450,18 +723,63 @@ def main():
                 CommandHandler("done", images_to_pdf_done),
             ]
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
     )
     
-    # অন্যান্য কনভারসেশন হ্যান্ডলার যোগ করবেন...
+    conv_handler_pdf2img = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_handler, pattern="^pdf2img$")],
+        states={
+            PDF_TO_IMAGES: [
+                MessageHandler(filters.Document.PDF, pdf_to_images_handle),
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
+    )
+    
+    conv_handler_merge = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_handler, pattern="^merge_pdf$")],
+        states={
+            PDF_MERGE: [
+                MessageHandler(filters.Document.PDF, merge_pdf_collect),
+                CommandHandler("done", merge_pdf_done),
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
+    )
+    
+    conv_handler_split = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_handler, pattern="^split_pdf$")],
+        states={
+            PDF_SPLIT: [
+                MessageHandler(filters.Document.PDF, split_pdf_get_file),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, split_pdf_get_pages),
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
+    )
+    
+    conv_handler_protect = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_handler, pattern="^protect_pdf$")],
+        states={
+            PDF_PROTECT: [
+                MessageHandler(filters.Document.PDF, protect_pdf_get_file),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, protect_pdf_set_password),
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", lambda u,c: u.message.reply_text(get_text('cancel', c)))],
+    )
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler_qr)
     app.add_handler(conv_handler_img2pdf)
+    app.add_handler(conv_handler_pdf2img)
+    app.add_handler(conv_handler_merge)
+    app.add_handler(conv_handler_split)
+    app.add_handler(conv_handler_protect)
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, fallback))
     
-    print("✅ Bot started (fully multilingual)")
+    print("✅ Bot started with all PDF functions")
     app.run_polling()
 
 if __name__ == "__main__":
