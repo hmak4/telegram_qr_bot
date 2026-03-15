@@ -1,12 +1,16 @@
-name: Telegram QR Bot
+name: Telegram QR Bot - Keep Alive
 
 on:
   push:
+    branches: [ main ]
   workflow_dispatch:
+  schedule:
+    - cron: '0 */5 * * *'  # প্রতি ৫ ঘন্টা পর পর রান করবে
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 350  # সর্বোচ্চ ৫ ঘন্টা ৫০ মিনিট
 
     steps:
       - name: Checkout repository
@@ -20,9 +24,15 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
+          pip install requests
 
-      - name: Run bot
+      - name: Run bot with auto-restart
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          python bot.py
+          while true; do
+            echo "Starting bot at $(date)"
+            python bot.py
+            echo "Bot stopped at $(date). Restarting in 5 seconds..."
+            sleep 5
+          done
