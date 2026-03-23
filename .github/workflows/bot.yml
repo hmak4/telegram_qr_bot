@@ -2,55 +2,75 @@ name: Telegram QR Bot
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'  # প্রতি ৬ ঘন্টা পর পর রান করবে (বট চালু রাখার জন্য)
+    - cron: '0 */4 * * *'  # প্রতি ৪ ঘন্টা পর পর (বট বেশি অ্যাকটিভ থাকবে)
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # GitHub Actions-এ সর্বোচ্চ ৬ ঘন্টা (360 মিনিট)
+    timeout-minutes: 350  # GitHub Actions-এ সর্বোচ্চ ৬ ঘন্টা
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  # আপডেটেড ভার্সন
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5  # আপডেটেড ভার্সন
         with:
-          python-version: '3.11'  # আপডেটেড ভার্সন
-          cache: 'pip'  # dependencies ক্যাশ করবে, পরবর্তী রানে দ্রুত হবে
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: Install system dependencies (Poppler for PDF conversion)
         run: |
           sudo apt update
-          sudo apt install -y poppler-utils
+          sudo apt install -y poppler-utils ghostscript
           echo "✅ Poppler installed:"
           pdftoppm -v
+          echo "✅ Ghostscript installed:"
+          gs --version
 
       - name: Upgrade pip and install Python dependencies
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
-          pip list  # ইনস্টল হওয়া প্যাকেজের তালিকা দেখার জন্য
+          echo "📦 Installed packages:"
+          pip list
 
       - name: Check Poppler path
         run: |
+          echo "Poppler binary locations:"
           which pdftoppm
-          ls -la /usr/bin/pdf* || true
+          which pdfinfo
+          ls -la /usr/bin/pdftoppm || echo "❌ pdftoppm not found in /usr/bin"
+          ls -la /usr/bin/pdfinfo || echo "❌ pdfinfo not found in /usr/bin"
 
-      - name: Run Telegram Bot
+      - name: Run Telegram Bot with auto-restart
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
           echo "🚀 Starting bot at $(date)"
-          echo "Bot will run for up to 6 hours"
-          python bot.py
-        continue-on-error: true  # বট ক্র্যাশ হলেও পরবর্তী স্টেপ চলবে
+          echo "Bot will run continuously with auto-restart on crash"
+          
+          # লুপ চালু রাখবে (বট ক্র্যাশ হলে আবার চালু করবে)
+          while true; do
+            echo "🔄 Bot process started at $(date)"
+            python bot.py
+            EXIT_CODE=$?
+            echo "❌ Bot exited with code $EXIT_CODE at $(date)"
+            
+            if [ $EXIT_CODE -eq 0 ]; then
+              echo "✅ Bot exited normally. Restarting in 5 seconds..."
+              sleep 5
+            else
+              echo "⚠️ Bot crashed. Restarting in 10 seconds..."
+              sleep 10
+            fi
+          done
 
-      - name: Keep workflow alive
+      - name: Keep workflow alive (fallback)
         if: always()
         run: |
-          echo "✅ Bot finished at $(date)"
-          echo "Workflow completed successfully"
+          echo "✅ Workflow completed at $(date)"
+          echo "Next run scheduled according to cron"
