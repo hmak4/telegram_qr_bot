@@ -5,19 +5,19 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
   schedule:
-    - cron: '0 */4 * * *'  # প্রতি ৪ ঘন্টা পর পর (বট বেশি অ্যাকটিভ থাকবে)
+    - cron: '*/30 * * * *'  # প্রতি 30 মিনিট পর পর (বট সবসময় অ্যাকটিভ রাখতে)
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 350  # GitHub Actions-এ সর্বোচ্চ ৬ ঘন্টা
+    timeout-minutes: 25  # 30 মিনিটের মধ্যে কাজ শেষ হবে
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4  # আপডেটেড ভার্সন
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5  # আপডেটেড ভার্সন
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -41,36 +41,19 @@ jobs:
       - name: Check Poppler path
         run: |
           echo "Poppler binary locations:"
-          which pdftoppm
-          which pdfinfo
-          ls -la /usr/bin/pdftoppm || echo "❌ pdftoppm not found in /usr/bin"
-          ls -la /usr/bin/pdfinfo || echo "❌ pdfinfo not found in /usr/bin"
+          which pdftoppm || echo "❌ pdftoppm not found"
+          which pdfinfo || echo "❌ pdfinfo not found"
 
-      - name: Run Telegram Bot with auto-restart
+      - name: Run Telegram Bot (single run)
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
           echo "🚀 Starting bot at $(date)"
-          echo "Bot will run continuously with auto-restart on crash"
-          
-          # লুপ চালু রাখবে (বট ক্র্যাশ হলে আবার চালু করবে)
-          while true; do
-            echo "🔄 Bot process started at $(date)"
-            python bot.py
-            EXIT_CODE=$?
-            echo "❌ Bot exited with code $EXIT_CODE at $(date)"
-            
-            if [ $EXIT_CODE -eq 0 ]; then
-              echo "✅ Bot exited normally. Restarting in 5 seconds..."
-              sleep 5
-            else
-              echo "⚠️ Bot crashed. Restarting in 10 seconds..."
-              sleep 10
-            fi
-          done
+          python bot.py
+          echo "✅ Bot finished at $(date)"
 
       - name: Keep workflow alive (fallback)
         if: always()
         run: |
           echo "✅ Workflow completed at $(date)"
-          echo "Next run scheduled according to cron"
+          echo "Next run scheduled in 30 minutes"
